@@ -173,7 +173,7 @@ static void hunter_fayrap(struct map_object *this)
         snprintf(arg2, size, "%d", map.height);
 
         /* exec() it */
-        execl("./hunter", arg1, arg2, NULL);
+        execl("./hunter", "./hunter", arg1, arg2, NULL);
         /* Error */
         perror("hunter_fayrap()");
         die(ERR_EXEC);
@@ -315,7 +315,7 @@ static void prey_fayrap(struct map_object *this)
         snprintf(arg2, size, "%d", map.height);
 
         /* exec() it */
-        execl("./prey", arg1, arg2, NULL);
+        execl("./prey", "./prey", arg1, arg2, NULL);
         /* Error */
         perror("prey_fayrap()");
         die(ERR_EXEC);
