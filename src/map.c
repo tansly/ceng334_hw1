@@ -1,8 +1,11 @@
 #include "globals.h"
 #include "map.h"
 
+#include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -11,6 +14,9 @@
 
 enum die_reason {
     ERR_INPUT,
+    ERR_FORK,
+    ERR_SOCKET,
+    ERR_EXEC
 };
 
 struct map_object {
@@ -19,20 +25,17 @@ struct map_object {
     void (*handle_move)(struct map_object *);
     int x;
     int y;
+    int fd;
+    pid_t pid;
+    int energy;
 };
 
 struct hunter {
     struct map_object base;
-    int fd;
-    pid_t pid;
-    int energy;
 };
 
 struct prey {
     struct map_object base;
-    int fd;
-    pid_t pid;
-    int energy;
 };
 
 struct obstacle {
@@ -57,6 +60,28 @@ static struct {
     struct pollfd *fds;
 } map;
 
+static void die(enum die_reason reason)
+{
+    switch (reason) {
+        case ERR_INPUT:
+            fprintf(stderr, "Input error\n");
+            break;
+        case ERR_FORK:
+            fprintf(stderr, "fork() error\n");
+            break;
+        case ERR_SOCKET:
+            fprintf(stderr, "Socket error\n");
+            break;
+        case ERR_EXEC:
+            fprintf(stderr, "exec() et al. error\n");
+            break;
+        default:
+            fprintf(stderr, "Unknown error %d\n", reason);
+            break;
+    }
+    exit(EXIT_FAILURE);
+}
+
 static inline int grid_idx_(int x, int y)
 {
     return x*map.width + y;
@@ -79,8 +104,48 @@ static char hunter_represent(void)
 
 static void hunter_fayrap(struct map_object *this)
 {
-    struct hunter *me = (struct hunter *)this;
-    printf("hunter_fayrap(): %d %d\n", me->base.x, me->base.y);
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, PF_UNIX, sv) == -1) {
+        perror("hunter_fayrap()");
+        die(ERR_SOCKET);
+    }
+    fcntl(sv[0], F_SETFD, FD_CLOEXEC);
+    pid_t pid;
+    pid = fork();
+    if (pid == -1) {
+        perror("hunter_fayrap()");
+        die(ERR_FORK);
+    } else if (pid > 0) {
+        close(sv[1]);
+        this->fd = sv[0];
+        this->pid = pid;
+    } else {
+        /* Child */
+        // close(sv[0]); FD_CLOEXEC
+        dup2(sv[1], STDIN_FILENO);
+        dup2(sv[1], STDOUT_FILENO);
+        close(sv[1]);
+
+        /* args */
+        int size;
+        char *arg1, *arg2;
+
+        size = snprintf(NULL, 0, "%d", map.width);
+        size++;
+        arg1 = malloc(size);
+        snprintf(arg1, size, "%d", map.width);
+
+        size = snprintf(NULL, 0, "%d", map.height);
+        size++;
+        arg2 = malloc(size);
+        snprintf(arg2, size, "%d", map.height);
+
+        /* exec() it */
+        execl("./hunter", arg1, arg2, NULL);
+        /* Error */
+        perror("hunter_fayrap()");
+        die(ERR_EXEC);
+    }
 }
 
 static void hunter_handle_move(struct map_object *this)
@@ -94,25 +159,52 @@ static char prey_represent(void)
 
 static void prey_fayrap(struct map_object *this)
 {
-    struct prey *me = (struct prey *)this;
-    printf("prey_fayrap(): %d %d\n", me->base.x, me->base.y);
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, PF_UNIX, sv) == -1) {
+        perror("prey_fayrap()");
+        die(ERR_SOCKET);
+    }
+    fcntl(sv[0], F_SETFD, FD_CLOEXEC);
+    pid_t pid;
+    pid = fork();
+    if (pid == -1) {
+        perror("prey_fayrap()");
+        die(ERR_FORK);
+    } else if (pid > 0) {
+        close(sv[1]);
+        this->fd = sv[0];
+        this->pid = pid;
+    } else {
+        /* Child */
+        // close(sv[0]); FD_CLOEXEC
+        dup2(sv[1], STDIN_FILENO);
+        dup2(sv[1], STDOUT_FILENO);
+        close(sv[1]);
+
+        /* args */
+        int size;
+        char *arg1, *arg2;
+
+        size = snprintf(NULL, 0, "%d", map.width);
+        size++;
+        arg1 = malloc(size);
+        snprintf(arg1, size, "%d", map.width);
+
+        size = snprintf(NULL, 0, "%d", map.height);
+        size++;
+        arg2 = malloc(size);
+        snprintf(arg2, size, "%d", map.height);
+
+        /* exec() it */
+        execl("./prey", arg1, arg2, NULL);
+        /* Error */
+        perror("prey_fayrap()");
+        die(ERR_EXEC);
+    }
 }
 
 static void prey_handle_move(struct map_object *this)
 {
-}
-
-void die(enum die_reason reason)
-{
-    switch (reason) {
-        case ERR_INPUT:
-            fprintf(stderr, "Input error\n");
-            break;
-        default:
-            fprintf(stderr, "Unknown error %d\n", reason);
-            break;
-    }
-    exit(EXIT_FAILURE);
 }
 
 void init_map(void)
@@ -165,7 +257,7 @@ void init_map(void)
         map.hunters[i].base.handle_move = hunter_handle_move;
         map.hunters[i].base.x = x;
         map.hunters[i].base.y = y;
-        map.hunters[i].energy = energy;
+        map.hunters[i].base.energy = energy;
     }
 
     /* Preys */
@@ -183,7 +275,7 @@ void init_map(void)
         map.preys[i].base.handle_move = prey_handle_move;
         map.preys[i].base.x = x;
         map.preys[i].base.y = y;
-        map.preys[i].energy = energy;
+        map.preys[i].base.energy = energy;
     }
 
     /* Set objects array */
@@ -198,8 +290,11 @@ void init_map(void)
     }
 
     /* Fayrap */
+    map.fds = malloc((map.n_hunters + map.n_preys) * sizeof *map.fds);
     for (i = 0; i < map.n_hunters + map.n_preys; i++) {
         map.objects[i]->fayrap(map.objects[i]);
+        map.fds[i].fd = map.objects[i]->fd;
+        map.fds[i].events = POLLIN;
     }
 }
 
@@ -223,6 +318,7 @@ void clean_map(void)
     free(map.hunters);
     free(map.preys);
     free(map.objects);
+    free(map.fds);
 }
 
 static void print_map(void)
