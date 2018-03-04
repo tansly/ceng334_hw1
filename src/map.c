@@ -46,6 +46,9 @@ struct empty {
     struct map_object base;
 };
 
+static char obstacle_represent(void);
+static char empty_represent(void);
+
 static struct {
     int *grid;
     int width;
@@ -58,7 +61,10 @@ static struct {
     struct prey *preys;
     struct map_object **objects;
     struct pollfd *fds;
-} map;
+} map = {
+    .the_obstacle = { .base.represent = obstacle_represent },
+    .the_empty = { .base.represent = empty_represent }
+};
 
 static void die(enum die_reason reason)
 {
@@ -207,7 +213,7 @@ static void prey_handle_move(struct map_object *this)
 {
 }
 
-void init_map(void)
+static void init_grid(void)
 {
     int width, height;
     int i, j;
@@ -219,17 +225,17 @@ void init_map(void)
     map.height = height;
     map.grid = malloc(map.width * map.height * sizeof *map.grid);
 
-    map.the_obstacle.base.represent = obstacle_represent;
-    map.the_empty.base.represent = empty_represent;
-
     /* Empty spots */
     for (i = 0; i < map.width; i++) {
         for (j = 0; j < map.height; j++) {
             map.grid[grid_idx_(i, j)] = IDX_EMPTY;
         }
     }
+}
 
-    /* Obstacles */
+static void init_obstacles(void)
+{
+    int i;
     int n_obstacles;
     if (scanf("%d", &n_obstacles) != 1) {
         die(ERR_INPUT);
@@ -241,8 +247,11 @@ void init_map(void)
         }
         map.grid[grid_idx_(x, y)] = IDX_OBSTACLE;
     }
+}
 
-    /* Hunters */
+static void init_hunters(void)
+{
+    int i;
     if (scanf("%d", &map.n_hunters) != 1) {
         die(ERR_INPUT);
     }
@@ -259,8 +268,11 @@ void init_map(void)
         map.hunters[i].base.y = y;
         map.hunters[i].base.energy = energy;
     }
+}
 
-    /* Preys */
+static void init_preys(void)
+{
+    int i;
     if (scanf("%d", &map.n_preys) != 1) {
         die(ERR_INPUT);
     }
@@ -277,8 +289,11 @@ void init_map(void)
         map.preys[i].base.y = y;
         map.preys[i].base.energy = energy;
     }
+}
 
-    /* Set objects array */
+static void init_objects(void)
+{
+    int i;
     map.objects = malloc((map.n_hunters + map.n_preys) * sizeof *map.objects);
     for (i = 0; i < map.n_hunters; i++) {
         map.objects[i] = (struct map_object *)&map.hunters[i];
@@ -288,14 +303,28 @@ void init_map(void)
         map.objects[i] = (struct map_object *)&map.preys[i - map.n_hunters];
         map.grid[grid_idx_(map.objects[i]->x, map.objects[i]->y)] = i;
     }
+}
 
-    /* Fayrap */
+static void fayrapla(void)
+{
+    int i;
     map.fds = malloc((map.n_hunters + map.n_preys) * sizeof *map.fds);
     for (i = 0; i < map.n_hunters + map.n_preys; i++) {
         map.objects[i]->fayrap(map.objects[i]);
         map.fds[i].fd = map.objects[i]->fd;
         map.fds[i].events = POLLIN;
     }
+}
+
+
+void init_map(void)
+{
+    init_grid();
+    init_obstacles();
+    init_hunters();
+    init_preys();
+    init_objects();
+    fayrapla();
 }
 
 static struct map_object *grid_get(int x, int y)
