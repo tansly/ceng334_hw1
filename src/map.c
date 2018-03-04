@@ -22,9 +22,10 @@ enum die_reason {
 struct map_object {
     char (*represent)(void);
     void (*fayrap)(struct map_object *);
-    void (*handle_move)(struct map_object *);
+    void (*handle_move)(struct map_object *, int, int);
     int x;
     int y;
+    int idx;
     int fd;
     pid_t pid;
     int energy;
@@ -66,6 +67,35 @@ static struct {
     .the_empty = { .base.represent = empty_represent }
 };
 
+static inline int grid_idx_(int x, int y)
+{
+    return x*map.width + y;
+}
+
+static void grid_set(int x, int y, int idx)
+{
+    map.grid[grid_idx_(x, y)] = idx;
+}
+
+static int grid_get_idx(int x, int y)
+{
+    return map.grid[grid_idx_(x, y)];
+}
+
+static struct map_object *grid_get_object(int x, int y)
+{
+    int idx = map.grid[grid_idx_(x, y)];
+    if (idx == IDX_OBSTACLE) {
+        /* Obstacle */
+        return (struct map_object *)&map.the_obstacle;
+    } else if (idx == IDX_EMPTY) {
+        /* Empty */
+        return (struct map_object *)&map.the_empty;
+    } else {
+        return map.objects[idx];
+    }
+}
+
 static void die(enum die_reason reason)
 {
     switch (reason) {
@@ -86,11 +116,6 @@ static void die(enum die_reason reason)
             break;
     }
     exit(EXIT_FAILURE);
-}
-
-static inline int grid_idx_(int x, int y)
-{
-    return x*map.width + y;
 }
 
 static char obstacle_represent(void)
@@ -154,8 +179,90 @@ static void hunter_fayrap(struct map_object *this)
     }
 }
 
-static void hunter_handle_move(struct map_object *this)
+static int move_possible(struct map_object *this, struct map_object *target)
 {
+    return target->represent() == map.the_empty.base.represent() ||
+            this->represent() != target->represent();
+}
+
+static void send_new_state(struct map_object *this)
+{
+    struct server_message state;
+    state.pos.x = this->x;
+    state.pos.y = this->y;
+
+    /* Closest adversary */
+    int i, min_dist, min_idx;
+    for (i = 0; map.objects[i]->energy == 0 ||
+            map.objects[i]->represent() == this->represent(); i++)
+        ; /* Skip dead objects, there will always be at least one alive here */
+    struct map_object *adv = map.objects[i];
+    min_dist = abs(adv->x - this->x) + abs(adv->y - this->y);
+    min_idx = i;
+    for (; i < map.n_hunters + map.n_preys; i++) {
+        adv = map.objects[i];
+        if (adv->represent() == this->represent()) {
+            /* Not an adversary */
+            continue;
+        }
+        int dist;
+        dist = abs(adv->x - this->x) + abs(adv->y - this->y);
+        if (dist < min_dist) {
+            min_dist = dist;
+            min_idx = i;
+        }
+    }
+    adv = map.objects[min_idx];
+    state.adv_pos.x = adv->x;
+    state.adv_pos.y = adv->y;
+
+    /* Neighbouring objects */
+    state.object_count = 0;
+    if (this->x - 1 > 0) {
+        struct map_object *neighbour = grid_get_object(this->x - 1, this->y);
+        if (!move_possible(this, neighbour)) {
+            struct coordinate coord = { this->x - 1, this->y };
+            state.object_pos[state.object_count++]  = coord;
+        }
+    }
+    if (this->y + 1 < map.width) {
+        struct map_object *neighbour = grid_get_object(this->x, this->y + 1);
+        if (!move_possible(this, neighbour)) {
+            struct coordinate coord = { this->x, this->y + 1 };
+            state.object_pos[state.object_count++]  = coord;
+        }
+    }
+    if (this->x + 1 < map.height) {
+        struct map_object *neighbour = grid_get_object(this->x + 1, this->y);
+        if (!move_possible(this, neighbour)) {
+            struct coordinate coord = { this->x + 1, this->y };
+            state.object_pos[state.object_count++]  = coord;
+        }
+    }
+    if (this->y - 1 > 0) {
+        struct map_object *neighbour = grid_get_object(this->x, this->y - 1);
+        if (!move_possible(this, neighbour)) {
+            struct coordinate coord = { this->x, this->y - 1 };
+            state.object_pos[state.object_count++]  = coord;
+        }
+    }
+    write(this->fd, &state, sizeof state);
+}
+
+static void hunter_handle_move(struct map_object *this, int x, int y)
+{
+    struct map_object *target = grid_get_object(x, y);
+    if (move_possible(this, target)) {
+        grid_set(x, y, this->idx);
+        grid_set(this->x, this->y, IDX_EMPTY);
+        this->x = x;
+        this->y = y;
+        this->energy--;
+    } else {
+        /* Move impossible */
+        /* TODO: Do nothing? */
+    }
+    send_new_state(this);
 }
 
 static char prey_represent(void)
@@ -209,7 +316,7 @@ static void prey_fayrap(struct map_object *this)
     }
 }
 
-static void prey_handle_move(struct map_object *this)
+static void prey_handle_move(struct map_object *this, int x, int y)
 {
 }
 
@@ -297,10 +404,12 @@ static void init_objects(void)
     map.objects = malloc((map.n_hunters + map.n_preys) * sizeof *map.objects);
     for (i = 0; i < map.n_hunters; i++) {
         map.objects[i] = (struct map_object *)&map.hunters[i];
+        map.objects[i]->idx = i;
         map.grid[grid_idx_(map.objects[i]->x, map.objects[i]->y)] = i;
     }
     for (; i < map.n_hunters + map.n_preys; i++) {
         map.objects[i] = (struct map_object *)&map.preys[i - map.n_hunters];
+        map.objects[i]->idx = i;
         map.grid[grid_idx_(map.objects[i]->x, map.objects[i]->y)] = i;
     }
 }
@@ -317,6 +426,14 @@ static void fayrapla(void)
     }
 }
 
+static void send_initial_states(void)
+{
+    int i;
+    for (i = 0; i < map.n_hunters + map.n_preys; i++) {
+        struct map_object *object = map.objects[i];
+        object->handle_move(object, object->x, object->y);
+    }
+}
 
 void init_map(void)
 {
@@ -326,20 +443,7 @@ void init_map(void)
     init_preys();
     init_objects();
     fayrapla();
-}
-
-static struct map_object *grid_get(int x, int y)
-{
-    int idx = map.grid[grid_idx_(x, y)];
-    if (idx == IDX_OBSTACLE) {
-        /* Obstacle */
-        return (struct map_object *)&map.the_obstacle;
-    } else if (idx == IDX_EMPTY) {
-        /* Empty */
-        return (struct map_object *)&map.the_empty;
-    } else {
-        return map.objects[idx];
-    }
+    send_initial_states();
 }
 
 void clean_map(void)
@@ -364,7 +468,7 @@ static void print_map(void)
     for (i = 0; i < map.width; i++) {
         putchar('|');
         for (j = 0; j < map.height; j++) {
-            printf("%c", grid_get(i, j)->represent());
+            printf("%c", grid_get_object(i, j)->represent());
         }
         putchar('|');
         putchar('\n');
