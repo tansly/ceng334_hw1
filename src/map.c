@@ -310,8 +310,9 @@ static void fayrapla(void)
     int i;
     map.fds = malloc((map.n_hunters + map.n_preys) * sizeof *map.fds);
     for (i = 0; i < map.n_hunters + map.n_preys; i++) {
-        map.objects[i]->fayrap(map.objects[i]);
-        map.fds[i].fd = map.objects[i]->fd;
+        struct map_object *object = map.objects[i];
+        object->fayrap(object);
+        map.fds[i].fd = object->fd;
         map.fds[i].events = POLLIN;
     }
 }
