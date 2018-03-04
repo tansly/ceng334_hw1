@@ -1,6 +1,7 @@
 #include "globals.h"
 #include "map.h"
 
+#include <assert.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
@@ -254,7 +255,12 @@ static void hunter_handle_move(struct map_object *this, int x, int y)
     struct map_object *target = grid_get_object(x, y);
     if (move_possible(this, target)) {
         grid_set(x, y, this->idx);
-        grid_set(this->x, this->y, IDX_EMPTY);
+        if (grid_get_idx(this->x, this->y) == this->idx) {
+            grid_set(this->x, this->y, IDX_EMPTY);
+        } else {
+            assert(grid_get_object(this->x, this->y)->represent() == 'P');
+            /* someone (a prey) stomped over me, leave them */
+        }
         this->x = x;
         this->y = y;
         this->energy--;
@@ -318,6 +324,22 @@ static void prey_fayrap(struct map_object *this)
 
 static void prey_handle_move(struct map_object *this, int x, int y)
 {
+    struct map_object *target = grid_get_object(x, y);
+    if (move_possible(this, target)) {
+        grid_set(x, y, this->idx);
+        if (grid_get_idx(this->x, this->y) == this->idx) {
+            grid_set(this->x, this->y, IDX_EMPTY);
+        } else {
+            assert(grid_get_object(this->x, this->y)->represent() == 'H');
+            /* someone (a hunter) stomped over me, leave them */
+        }
+        this->x = x;
+        this->y = y;
+    } else {
+        /* Move impossible */
+        /* TODO: Do nothing? */
+    }
+    send_new_state(this);
 }
 
 static void init_grid(void)
