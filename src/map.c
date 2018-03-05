@@ -457,26 +457,6 @@ static void send_initial_states(void)
     }
 }
 
-void init_map(void)
-{
-    init_grid();
-    init_obstacles();
-    init_hunters();
-    init_preys();
-    init_objects();
-    fayrapla();
-    send_initial_states();
-}
-
-void clean_map(void)
-{
-    free(map.grid);
-    free(map.hunters);
-    free(map.preys);
-    free(map.objects);
-    free(map.fds);
-}
-
 static void print_map(void)
 {
     int i, j;
@@ -504,7 +484,36 @@ static void print_map(void)
     putchar('\n');
 }
 
+void init_map(void)
+{
+    init_grid();
+    init_obstacles();
+    init_hunters();
+    init_preys();
+    init_objects();
+    fayrapla();
+    send_initial_states();
+    print_map();
+}
+
+void clean_map(void)
+{
+    free(map.grid);
+    free(map.hunters);
+    free(map.preys);
+    free(map.objects);
+    free(map.fds);
+}
+
 void run_simulation(void)
 {
-    print_map();
+    int running = 1;
+    int updated = 0;
+    while (running) {
+        if (poll(map.fds, map.n_hunters + map.n_preys, -1) > 0) {
+            int i;
+            for (i = 0; i < map.n_hunters + map.n_preys; i++) {
+            }
+        }
+    }
 }
