@@ -24,6 +24,8 @@ enum die_reason {
     ERR_EXEC,
     ERR_KILL,
     ERR_WAIT,
+    ERR_READ,
+    ERR_WRITE,
 };
 
 struct map_object {
@@ -123,6 +125,12 @@ static void die(enum die_reason reason)
             break;
         case ERR_WAIT:
             fprintf(stderr, "wait() error\n");
+            break;
+        case ERR_READ:
+            fprintf(stderr, "read() error\n");
+            break;
+        case ERR_WRITE:
+            fprintf(stderr, "write() error\n");
             break;
         default:
             fprintf(stderr, "Unknown error %d\n", reason);
@@ -261,7 +269,9 @@ static void send_new_state(struct map_object *this)
             state.object_pos[state.object_count++]  = coord;
         }
     }
-    write(this->fd, &state, sizeof state);
+    if (write(this->fd, &state, sizeof state) != sizeof state) {
+        die(ERR_WRITE);
+    }
 }
 
 static int hunter_handle_move(struct map_object *this, int x, int y)
@@ -555,7 +565,9 @@ void run_simulation(void)
                     /* Data ready from a child */
                     struct ph_message message;
                     struct map_object *object;
-                    read(map.fds[i].fd, &message, sizeof message);
+                    if (read(map.fds[i].fd, &message, sizeof message) != sizeof message) {
+                        die(ERR_READ);
+                    }
                     object = map.objects[i];
                     updated = object->handle_move(object, message.move_request.x,
                             message.move_request.y);
