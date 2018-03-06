@@ -207,16 +207,17 @@ static void send_new_state(struct map_object *this)
     /* Closest adversary */
     int i, min_dist, min_idx;
     for (i = 0; map.objects[i]->idx == -1 ||
-            map.objects[i]->represent() == this->represent(); i++)
-        ; /* Skip dead objects, there will always be at least one alive here */
+            map.objects[i]->represent() == this->represent(); i++) {
+        /* Skip dead objects, there will always be at least one alive here */
+        assert(i < map.n_hunters + map.n_preys);
+    }
     struct map_object *adv = map.objects[i];
     min_dist = abs(adv->x - this->x) + abs(adv->y - this->y);
     min_idx = i;
     for (; i < map.n_hunters + map.n_preys; i++) {
-        /* FIXME: Check if dead */
         adv = map.objects[i];
-        if (adv->represent() == this->represent()) {
-            /* Not an adversary */
+        if (adv->idx == -1 || adv->represent() == this->represent()) {
+            /* Dead or not an adversary */
             continue;
         }
         int dist;
