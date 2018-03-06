@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -209,6 +210,7 @@ static int move_possible(struct map_object *this, struct map_object *target)
 static void send_new_state(struct map_object *this)
 {
     struct server_message state;
+    memset(&state, 0xff, sizeof state);
     state.pos.x = this->x;
     state.pos.y = this->y;
 
