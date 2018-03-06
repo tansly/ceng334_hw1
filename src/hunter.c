@@ -1,6 +1,9 @@
 #include "globals.h"
 
+#include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 
 int width;
@@ -24,15 +27,18 @@ int main(int argc, char **argv)
     if (sscanf(argv[1], "%d", &height) != 1) {
         return 1;
     }
+    srand(time(NULL));
 
     for (;;) {
         struct server_message message;
-        read(STDIN_FILENO, &message, sizeof message);
+        if (read(STDIN_FILENO, &message, sizeof message) != sizeof message) {
+            return 2;
+        }
         location = message.pos;
 
         struct coordinate request;
-        enum { UP, RIGHT, DOWN, LEFT, DONE } state = LEFT;
-        while (state != DONE) {
+        enum { UP, RIGHT, DOWN, LEFT, CURR, DONE } state = UP;
+        for (;;) {
             switch (state) {
                 case UP:
                     request.x = location.x - 1;
@@ -52,18 +58,28 @@ int main(int argc, char **argv)
                 case LEFT:
                     request.x = location.x;
                     request.y = location.y - 1;
+                    state = CURR;
+                    break;
+                case CURR:
+                    request = location;
                     state = DONE;
                     break;
+                case DONE:
+                    assert(0);
+                    break;
+            }
+            if (state == DONE) {
+                break;
             }
 
-            int move_possible = coordinate_valid(request);
+            int move_possible = coordinate_valid(request) &&
+                (abs(request.x - message.adv_pos.x) + abs(request.y - message.adv_pos.y) <
+                 abs(location.x - message.adv_pos.x) + abs(location.y - message.adv_pos.y));
             if (move_possible) {
                 int i;
-                for (i = 0; i < message.object_count; i++) {
-                    if (request.x == message.object_pos[i].x &&
-                            request.y == message.object_pos[i].y) {
-                        move_possible = 0;
-                    }
+                for (i = 0; i < message.object_count && move_possible; i++) {
+                    move_possible = !(request.x == message.object_pos[i].x &&
+                            request.y == message.object_pos[i].y);
                 }
             }
 
@@ -74,6 +90,9 @@ int main(int argc, char **argv)
 
         struct ph_message req_msg;
         req_msg.move_request = request;
-        write(STDOUT_FILENO, &req_msg, sizeof req_msg);
+        if (write(STDOUT_FILENO, &req_msg, sizeof req_msg) != sizeof req_msg) {
+            return 3;
+        }
+        usleep(10000*(1 + rand()%9));
     }
 }
