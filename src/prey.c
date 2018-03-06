@@ -13,7 +13,7 @@ struct coordinate location;
 
 int coordinate_valid(struct coordinate coord)
 {
-    return coord.x > 0 && coord.x < height && coord.y > 0 && coord.y < width;
+    return coord.x >= 0 && coord.x < height && coord.y >= 0 && coord.y < width;
 }
 
 int main(int argc, char **argv)
