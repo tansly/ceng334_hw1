@@ -3,26 +3,33 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define IDX_OBSTACLE -1
 #define IDX_EMPTY -2
 
+/* TODO: Add more error checking, e.g. to close() calls.
+ */
+
 enum die_reason {
     ERR_INPUT,
     ERR_FORK,
     ERR_SOCKET,
-    ERR_EXEC
+    ERR_EXEC,
+    ERR_KILL,
+    ERR_WAIT,
 };
 
 struct map_object {
     char (*represent)(void);
     void (*fayrap)(struct map_object *);
-    void (*handle_move)(struct map_object *, int, int);
+    int (*handle_move)(struct map_object *, int, int);
     int x;
     int y;
     int idx;
@@ -111,6 +118,12 @@ static void die(enum die_reason reason)
         case ERR_EXEC:
             fprintf(stderr, "exec() et al. error\n");
             break;
+        case ERR_KILL:
+            fprintf(stderr, "kill() error\n");
+            break;
+        case ERR_WAIT:
+            fprintf(stderr, "wait() error\n");
+            break;
         default:
             fprintf(stderr, "Unknown error %d\n", reason);
             break;
@@ -193,13 +206,14 @@ static void send_new_state(struct map_object *this)
 
     /* Closest adversary */
     int i, min_dist, min_idx;
-    for (i = 0; map.objects[i]->energy == 0 ||
+    for (i = 0; map.objects[i]->idx == -1 ||
             map.objects[i]->represent() == this->represent(); i++)
         ; /* Skip dead objects, there will always be at least one alive here */
     struct map_object *adv = map.objects[i];
     min_dist = abs(adv->x - this->x) + abs(adv->y - this->y);
     min_idx = i;
     for (; i < map.n_hunters + map.n_preys; i++) {
+        /* FIXME: Check if dead */
         adv = map.objects[i];
         if (adv->represent() == this->represent()) {
             /* Not an adversary */
@@ -249,9 +263,10 @@ static void send_new_state(struct map_object *this)
     write(this->fd, &state, sizeof state);
 }
 
-static void hunter_handle_move(struct map_object *this, int x, int y)
+static int hunter_handle_move(struct map_object *this, int x, int y)
 {
     struct map_object *target = grid_get_object(x, y);
+    int moved;
     if (move_possible(this, target)) {
         grid_set(x, y, this->idx);
         if (grid_get_idx(this->x, this->y) == this->idx) {
@@ -263,11 +278,14 @@ static void hunter_handle_move(struct map_object *this, int x, int y)
         this->x = x;
         this->y = y;
         this->energy--;
+
+        moved = 1;
     } else {
         /* Move impossible */
-        /* TODO: Do nothing? */
+        moved = 0;
     }
     send_new_state(this);
+    return moved;
 }
 
 static char prey_represent(void)
@@ -321,9 +339,10 @@ static void prey_fayrap(struct map_object *this)
     }
 }
 
-static void prey_handle_move(struct map_object *this, int x, int y)
+static int prey_handle_move(struct map_object *this, int x, int y)
 {
     struct map_object *target = grid_get_object(x, y);
+    int moved;
     if (move_possible(this, target)) {
         grid_set(x, y, this->idx);
         if (grid_get_idx(this->x, this->y) == this->idx) {
@@ -334,11 +353,14 @@ static void prey_handle_move(struct map_object *this, int x, int y)
         }
         this->x = x;
         this->y = y;
+
+        moved = 1;
     } else {
         /* Move impossible */
-        /* TODO: Do nothing? */
+        moved = 0;
     }
     send_new_state(this);
+    return moved;
 }
 
 static void init_grid(void)
@@ -497,6 +519,21 @@ void init_map(void)
 
 void clean_map(void)
 {
+    int i;
+    for (i = 0; i < map.n_hunters + map.n_preys; i++) {
+        struct map_object *object = map.objects[i];
+        if (object->pid > 0) {
+            if (kill(object->pid, SIGTERM) == -1) {
+                perror("run_simulation()");
+                die(ERR_KILL);
+            }
+            if (waitpid(object->pid, NULL, 0) == -1) {
+                perror("run_simulation()");
+                die(ERR_WAIT);
+            }
+            close(map.fds[object->idx].fd);
+        }
+    }
     free(map.grid);
     free(map.hunters);
     free(map.preys);
@@ -506,13 +543,101 @@ void clean_map(void)
 
 void run_simulation(void)
 {
-    int running = 1;
+    int hunters_alive = map.n_hunters, preys_alive = map.n_preys;
     int updated = 0;
-    while (running) {
+    while (hunters_alive && preys_alive) {
         if (poll(map.fds, map.n_hunters + map.n_preys, -1) > 0) {
             int i;
             for (i = 0; i < map.n_hunters + map.n_preys; i++) {
+                int revents = map.fds[i].revents;
+                if (revents & POLLIN) {
+                    /* Data ready from a child */
+                    struct ph_message message;
+                    struct map_object *object;
+                    read(map.fds[i].fd, &message, sizeof message);
+                    object = map.objects[i];
+                    updated = object->handle_move(object, message.move_request.x,
+                            message.move_request.y);
+                }
             }
+        }
+
+        int i;
+        preys_alive = 0;
+        for (i = 0; i < map.n_preys; i++) {
+            struct map_object *prey = (struct map_object *)&map.preys[i];
+            if (prey->idx < 0) {
+                /* Already dead */
+                /* NOTHING */
+            } else if (prey->idx != grid_get_idx(prey->x, prey->y)) {
+                /* Hunter on prey */
+                if (kill(prey->pid, SIGTERM) == -1) {
+                    perror("run_simulation()");
+                    die(ERR_KILL);
+                }
+                if (waitpid(prey->pid, NULL, 0) == -1) {
+                    perror("run_simulation()");
+                    die(ERR_WAIT);
+                }
+                close(map.fds[prey->idx].fd);
+                map.fds[prey->idx].fd = -1;
+                prey->fd = -1;
+                prey->pid = -1;
+                /* Add prey energy to hunter */
+                grid_get_object(prey->x, prey->y)->energy += prey->energy;
+                /* Invalidate remaining attributes */
+                prey->x = -1;
+                prey->y = -1;
+                prey->idx = -1;
+                prey->energy = 0;
+
+                /* Map is updated */
+                updated = 1;
+            } else {
+                /* Alive */
+                preys_alive++;
+            }
+        }
+
+        hunters_alive = 0;
+        for (i = 0; i < map.n_hunters; i++) {
+            struct map_object *hunter = (struct map_object *)&map.hunters[i];
+            if (hunter->idx < 0) {
+                /* Already dead */
+                /* NOTHING */
+            } else if (hunter->energy == 0) {
+                /* Hunter died */
+                if (kill(hunter->pid, SIGTERM) == -1) {
+                    perror("run_simulation()");
+                    die(ERR_KILL);
+                }
+                if (waitpid(hunter->pid, NULL, 0) == -1) {
+                    perror("run_simulation()");
+                    die(ERR_WAIT);
+                }
+                close(map.fds[hunter->idx].fd);
+                map.fds[hunter->idx].fd = -1;
+                hunter->fd = -1;
+                hunter->pid = -1;
+                /* Update the grid */
+                grid_set(hunter->x, hunter->y, IDX_EMPTY);
+                /* Invalidate remaining attributes */
+                hunter->x = -1;
+                hunter->y = -1;
+                hunter->idx = -1;
+                hunter->energy = 0;
+
+                /* Map is updated */
+                updated = 1;
+            } else {
+                /* Alive */
+                hunters_alive++;
+            }
+        }
+
+        if (updated) {
+            print_map();
+            updated = 0;
         }
     }
 }
