@@ -285,7 +285,7 @@ static int hunter_handle_move(struct map_object *this, int x, int y)
         if (grid_get_idx(this->x, this->y) == this->idx) {
             grid_set(this->x, this->y, IDX_EMPTY);
         } else {
-            assert(grid_get_object(this->x, this->y)->represent() == 'P');
+            //assert(grid_get_object(this->x, this->y)->represent() == 'P');
             /* someone (a prey) stomped over me, leave them */
         }
         this->x = x;
