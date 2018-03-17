@@ -203,8 +203,8 @@ static void hunter_fayrap(struct map_object *this)
 
 static int move_possible(struct map_object *this, struct map_object *target)
 {
-    return target->represent() == map.the_empty.base.represent() ||
-            this->represent() != target->represent();
+    return target->represent() == map.the_empty.base.represent() || (
+            this->represent() != target->represent() && target->represent() != map.the_obstacle.base.represent());
 }
 
 static void send_new_state(struct map_object *this)
